@@ -1,0 +1,7 @@
+.idea
+/dist
+/dist2
+/dist3
+/config2.yml
+/config3.yml
+/golangci.yml

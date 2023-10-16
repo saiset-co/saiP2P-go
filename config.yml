@@ -1,0 +1,7 @@
+p2p:
+  port: 9000
+  slot: 3
+http:
+  port: 8080
+peers:
+debug: false
