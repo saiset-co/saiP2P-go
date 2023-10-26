@@ -53,7 +53,7 @@ func (c *Core) Serve(filter filterConnections) (err error) {
 	// listen msgs from broadcast
 
 	for {
-		buf := make([]byte, 4096)
+		buf := make([]byte, 500000)
 		n, newClientAddr, err := c.Server.Connections.In.ReadFromUDP(buf)
 		if err != nil {
 			c.Logger.Warn("StartServer", zap.Error(err))
