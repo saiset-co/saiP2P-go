@@ -28,7 +28,7 @@ func (c *Core) ConnectToPeer() error {
 	}()
 
 	request := Request{Type: punchRequest, LocalAddr: c.Client.Address.Local, RemoteAddr: c.Client.Address.Remote}
-	buf := make([]byte, 4096)
+	buf := make([]byte, 500000)
 
 	serverUDPAddr, err := net.ResolveUDPAddr("udp4", c.Client.Address.Remote)
 	if err != nil {
