@@ -1,9 +1,0 @@
-p2p:
-  port: 3203
-  slot: 10
-http:
-  port: 8080
-peers:
-  - '31.187.74.78:3203'
-debug: false
-socket: ':3241'
