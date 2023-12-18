@@ -19,7 +19,8 @@ type Config struct {
 	Peers                     []string `yaml:"peers"`
 	OnBroadcastMessageReceive []string
 	OnDirectMessageReceive    []string
-	DebugMode                 bool `yaml:"debug"`
+	DebugMode                 bool   `yaml:"debug"`
+	SocketPort                string `yaml:"socket"`
 }
 
 // Get - parses config.yml, return config struct
