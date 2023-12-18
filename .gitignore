@@ -5,3 +5,6 @@
 /config2.yml
 /config3.yml
 /golangci.yml
+
+build
+Makefile

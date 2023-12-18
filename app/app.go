@@ -8,11 +8,15 @@ import (
 	api "github.com/saiset-co/saiP2P-go/api/http"
 	"github.com/saiset-co/saiP2P-go/config"
 	corelib "github.com/saiset-co/saiP2P-go/core"
+	"github.com/saiset-co/saiP2P-go/core/socket"
 	"go.uber.org/zap"
 )
 
 // Run - main start point of the app
 func Run() {
+
+	ctx := context.Background()
+
 	config, err := config.Get()
 	if err != nil {
 		log.Fatalf("GetConfig : %s", err.Error())
@@ -37,15 +41,44 @@ func Run() {
 		}
 	}()
 
+	socketServer := socket.NewServer(config.SocketPort)
+	go func() {
+		if err := socketServer.Listen(ctx); err != nil {
+			return
+		}
+	}()
+
+	go func() {
+		in := socketServer.Incoming()
+		for {
+			select {
+			case m := <-in:
+				switch m.Method {
+				case "broadcast":
+					core.Lock()
+					core.SavedMessages[string(m.Data)] = true
+					core.Unlock()
+
+					err = core.SendMsg(m.Data, []string{}, core.GetRealAddress())
+					if err != nil {
+
+					}
+				default:
+					//todo:..
+				}
+			}
+		}
+	}()
+
 	// get messages
 	go func() {
 		for {
-			msg, err := core.NextMsg(context.Background())
+			msg, err := core.NextMsg(ctx)
 			if err != nil {
 				core.Logger.Error("main -> s.Next", zap.Error(err))
 				continue
 			}
-			core.Logger.Info("MESSAGE", zap.String("FROM", msg.From), zap.Strings("TO", msg.To), zap.Any("DATA", msg.Data))
+			socketServer.Broadcast(&socket.SocketMessage{Method: "forward", Data: msg.Data})
 		}
 	}()
 

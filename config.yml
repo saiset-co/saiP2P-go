@@ -5,3 +5,4 @@ http:
   port: 8080
 peers:
 debug: false
+socket: 'localhost:3241'
