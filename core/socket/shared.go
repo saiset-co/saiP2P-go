@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"bytes"
 	"encoding/json"
 	"net"
 	"strings"
@@ -12,6 +13,10 @@ import (
 const (
 	ReadTimeout  = time.Minute
 	WriteTimeout = time.Minute
+
+	SocketType = "tcp"
+	dimmer     = "\n"
+	readSize   = 1024 * 100
 )
 
 type Logger interface {
@@ -20,12 +25,17 @@ type Logger interface {
 }
 
 type simpleLogger struct {
-	pref string
+	pref    string
+	verbose bool
 }
 
 func (l *simpleLogger) Info(s string) {
+	if !l.verbose {
+		return
+	}
 	println(l.pref + s)
 }
+
 func (l *simpleLogger) Error(err error, s string) {
 	println(l.pref, s+": "+err.Error())
 }
@@ -34,6 +44,13 @@ func NewPingMessage() SocketMessage {
 	return SocketMessage{
 		Method: "ping",
 		Data:   nil,
+	}
+}
+
+func NewGreetingMessage(name string) SocketMessage {
+	return SocketMessage{
+		Method: "greeting",
+		Data:   []byte(name),
 	}
 }
 
@@ -49,9 +66,9 @@ type SocketMessage struct {
 	Data   []byte `json:"data"`
 }
 
-func read(l Logger, size int, conn net.Conn) ([]SocketMessage, error) {
+func read(buf *bytes.Buffer, conn net.Conn) ([]SocketMessage, error) {
 
-	data := make([]byte, size)
+	data := make([]byte, readSize)
 	if err := conn.SetReadDeadline(time.Now().Add(ReadTimeout)); err != nil {
 		return nil, err
 	}
@@ -65,7 +82,12 @@ func read(l Logger, size int, conn net.Conn) ([]SocketMessage, error) {
 	}
 	data = data[:n]
 
-	items := strings.Split(string(data), "\n")
+	if buf.Len() > 0 {
+		data = append(buf.Bytes(), data...)
+		buf.Reset()
+	}
+
+	items := strings.Split(string(data), dimmer)
 
 	m := make([]SocketMessage, 0, len(items))
 
@@ -75,7 +97,8 @@ func read(l Logger, size int, conn net.Conn) ([]SocketMessage, error) {
 		}
 		var itemMessage SocketMessage
 		if err := json.Unmarshal([]byte(item), &itemMessage); err != nil {
-			return nil, errors.Wrap(err, "read.json.Unmarshal")
+			buf.WriteString(item)
+			continue
 		}
 		m = append(m, itemMessage)
 	}
@@ -95,10 +118,11 @@ func send(l Logger, conn net.Conn, m SocketMessage) error {
 		return errors.Wrap(err, "send.json.Marshal")
 	}
 
-	b = append(b, []byte("\n")...)
+	b = append(b, []byte(dimmer)...)
 	_, err = conn.Write(b)
 	if err != nil {
 		return errors.Wrap(err, "send.conn.Write")
 	}
+
 	return nil
 }
