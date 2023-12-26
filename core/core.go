@@ -51,7 +51,7 @@ func Init(config config.Config, f filterConnections) *Core {
 		Config:            config,
 	}
 
-	logger, err := utils.BuildLogger(true)
+	logger, err := utils.BuildLogger(config.DebugMode)
 	if err != nil {
 		log.Fatalf("p2p -> Server -> BuildLogger : %s", err.Error())
 	}

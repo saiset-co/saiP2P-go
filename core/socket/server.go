@@ -24,6 +24,13 @@ type Server struct {
 	fanIn chan SocketMessage
 }
 
+type Status string
+
+const StatusOK Status = "ok"
+const StatusConnecting Status = "connecting"
+const StatusClosing Status = "closing"
+const StatusIdle Status = "idle"
+
 type SocketConn struct {
 	name string
 
@@ -37,142 +44,38 @@ type SocketConn struct {
 	out  chan SocketMessage
 	stop func()
 
-	connecting *atomic.Bool
-
 	SentCount int
 
 	readBuffer *bytes.Buffer
+
+	readingErrorCount int
+
+	status Status
 }
 
-func NewServer(port string) *Server {
+func NewServer(port string, v bool) *Server {
 	return &Server{
-		fanIn:  make(chan SocketMessage, 100),
+		fanIn:  make(chan SocketMessage, 100_000),
 		port:   port,
-		Logger: &simpleLogger{pref: "[srv] "},
+		Logger: &simpleLogger{pref: "[srv] ", verbose: v},
 		ConnMap: ConnMap{
 			mu:             sync.Mutex{},
 			connections:    map[int64]*SocketConn{},
 			nextConnNumber: &atomic.Int64{},
+			nums:           []int64{},
 		},
 		pingInterval:         time.Second * 5,
 		maxNoPingPongTimeout: time.Second * 10,
 	}
 }
 
-func (r *Server) broadcastPing(ctx context.Context) {
-	ticker := time.NewTicker(r.pingInterval)
-	defer ticker.Stop()
-
-	for {
-		r.ConnMap.mu.Lock()
-		for _, c := range r.ConnMap.connections {
-			c.pingSent = time.Now()
-			c.out <- NewPingMessage()
-		}
-		r.ConnMap.mu.Unlock()
-
-		select {
-		case <-ticker.C:
-
-		}
+func (r *Server) DropConnections() {
+	r.ConnMap.mu.Lock()
+	for key, _ := range r.ConnMap.connections {
+		r.Logger.Info(fmt.Sprintf("server stoped. reset conn %d ", key))
+		r.ConnMap.connections[key].stop()
 	}
-}
-
-type ConnMap struct {
-	mu             sync.Mutex
-	connections    map[int64]*SocketConn
-	nextConnNumber *atomic.Int64
-
-	lastUsed int
-	nums     []int64
-}
-
-func (m *ConnMap) Update(num int64, fn func(c *SocketConn)) {
-	m.mu.Lock()
-	fn(m.connections[num])
-	m.mu.Unlock()
-}
-
-func (m *ConnMap) Conn(num int64) net.Conn {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.connections[num].conn
-}
-
-func (m *ConnMap) ReadBuffer(num int64) *bytes.Buffer {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.connections[num].readBuffer
-}
-
-func (m *ConnMap) Connecting(num int64) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.connections[num].connecting.Load()
-}
-
-func (m *ConnMap) Connections() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.connections)
-}
-
-func (m *ConnMap) Next() int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if len(m.nums) == 0 {
-		return 0
-	}
-	m.lastUsed++
-	if m.lastUsed >= len(m.nums) {
-		m.lastUsed = 0
-	}
-	return m.nums[m.lastUsed]
-}
-
-func (m *ConnMap) Send(num int64, msg SocketMessage) {
-	m.mu.Lock()
-	out := m.connections[num].out
-	m.mu.Unlock()
-
-	out <- msg
-}
-
-func (m *ConnMap) AddConn(c *SocketConn) int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	num := m.nextConnNumber.Load()
-	m.connections[num] = c
-	m.nextConnNumber.Add(1)
-	m.nums = append(m.nums, num)
-	return num
-}
-
-func (m *ConnMap) DropConn(num int64) int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	_ = m.connections[num].conn.Close()
-	m.nextConnNumber.Add(-1)
-
-	resolvedNums := []int64{}
-	for _, n := range m.nums {
-		if n == num {
-			continue
-		}
-		resolvedNums = append(resolvedNums, n)
-	}
-
-	m.connections[num].readBuffer.Reset()
-	close(m.connections[num].out)
-	m.nums = resolvedNums
-	m.lastUsed = 0
-
-	return num
+	r.ConnMap.mu.Unlock()
 }
 
 func (r *Server) Incoming() chan SocketMessage {
@@ -231,7 +134,6 @@ func (r *Server) Listen(ctx context.Context) error {
 	}
 
 	r.Logger.Info("listen in tcp port: " + r.port)
-	go r.broadcastPing(ctx)
 	go r.Cleaner(ctx)
 
 	// Accept incoming connections and handle them
@@ -258,7 +160,7 @@ func (r *Server) handleConnection(conn net.Conn) {
 
 	readBuffer := bytes.NewBuffer([]byte{})
 
-	num := r.ConnMap.AddConn(&SocketConn{
+	socket := &SocketConn{
 		name:            "", // set later with greeting mesage
 		conn:            conn,
 		pingSent:        time.Now(),
@@ -266,19 +168,27 @@ func (r *Server) handleConnection(conn net.Conn) {
 		lastMsgReceived: time.Now(),
 		out:             out,
 		stop:            cancel,
-		connecting:      nil, // server does not need that flag
 		SentCount:       0,
 		readBuffer:      readBuffer,
-	})
+		status:          StatusOK,
+	}
 
-	defer r.ConnMap.DropConn(num)
+	num := r.ConnMap.AddConn(socket)
+
+	defer func() {
+		r.ConnMap.DropConn(num)
+	}()
 
 	r.Logger.Info("new connection with : " + remote)
+	defer r.Logger.Info("connection dropped : " + remote)
 
-	defer conn.Close()
-
+	sendStopped := make(chan struct{})
+	defer close(sendStopped)
 	// send
 	go func() {
+		defer func() {
+			sendStopped <- struct{}{}
+		}()
 		for {
 			select {
 			case <-ctx.Done():
@@ -300,47 +210,83 @@ func (r *Server) handleConnection(conn net.Conn) {
 		}
 	}()
 
+	readStopped := make(chan struct{})
+	defer close(readStopped)
+
 	// receive
-	for {
-		select {
-		case <-ctx.Done():
-			break
-		default:
-			messages, err := read(readBuffer, conn)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					r.Logger.Error(err, "probably client disconnected")
-					time.Sleep(time.Millisecond * 200)
+	go func() {
+		defer func() {
+			readStopped <- struct{}{}
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				messages, err := read(readBuffer, conn)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						r.Logger.Error(err, "probably client disconnected")
+						time.Sleep(time.Millisecond * 200)
+						continue
+					}
+					r.Logger.Error(err, "connection.read")
 					continue
 				}
-				r.Logger.Error(err, "connection.read")
-				continue
-			}
 
-			for _, m := range messages {
-				r.Logger.Info(m.Method + " from " + remote)
+				for _, m := range messages {
+					r.Logger.Info(m.Method + " from " + remote)
 
-				switch m.Method {
-				case "pong":
-					r.ConnMap.mu.Lock()
-					v, ok := r.ConnMap.connections[num]
-					if ok {
-						v.pongReceived = time.Now()
-						if v.pongReceived.Unix()-v.pingSent.Unix() > 5 {
-							cancel()
+					switch m.Method {
+					case "pong":
+						r.ConnMap.mu.Lock()
+						v, ok := r.ConnMap.connections[num]
+						if ok {
+							v.pongReceived = time.Now()
+							if v.pongReceived.Unix()-v.pingSent.Unix() > 5 {
+								cancel()
+							}
 						}
+						r.ConnMap.mu.Unlock()
+					case "ping":
+						out <- NewPongMessage()
+					case "greeting":
+						r.ConnMap.mu.Lock()
+						r.ConnMap.connections[num].name = string(m.Data)
+						r.ConnMap.mu.Unlock()
+					default:
+						r.fanIn <- m
 					}
-					r.ConnMap.mu.Unlock()
-				case "ping":
-					out <- NewPongMessage()
-				case "greeting":
-					r.ConnMap.mu.Lock()
-					r.ConnMap.connections[num].name = string(m.Data)
-					r.ConnMap.mu.Unlock()
-				default:
-					r.fanIn <- m
 				}
 			}
 		}
-	}
+	}()
+
+	pingStopped := make(chan struct{})
+	defer close(pingStopped)
+	// ping
+	go func() {
+		defer func() {
+			pingStopped <- struct{}{}
+		}()
+		t := time.NewTicker(r.pingInterval)
+		defer t.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _ = <-t.C:
+				r.ConnMap.Update(num, func(c *SocketConn) {
+					c.pingSent = time.Now()
+				})
+
+				out <- NewPingMessage()
+			}
+		}
+	}()
+
+	<-readStopped
+	<-sendStopped
+	<-pingStopped
 }

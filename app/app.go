@@ -41,7 +41,7 @@ func Run() {
 		}
 	}()
 
-	socketServer := socket.NewServer(config.SocketPort)
+	socketServer := socket.NewServer(config.SocketPort, false)
 	go func() {
 		if err := socketServer.Listen(ctx); err != nil {
 			return
@@ -50,24 +50,15 @@ func Run() {
 
 	go func() {
 		in := socketServer.Incoming()
-		for {
-			select {
-			case m := <-in:
-				switch m.Method {
-				case "broadcast":
-					core.Lock()
-					core.SavedMessages[string(m.Data)] = true
-					core.Unlock()
 
-					err = core.SendMsg(m.Data, []string{}, core.GetRealAddress())
-					if err != nil {
+		socket.SendWithPool(ctx, in, 10, func(m socket.SocketMessage) error {
+			core.Lock()
+			core.SavedMessages[string(m.Data)] = true
+			core.Unlock()
 
-					}
-				default:
-					//todo:..
-				}
-			}
-		}
+			err = core.SendMsg(m.Data, []string{}, core.GetRealAddress())
+			return err
+		})
 	}()
 
 	// get messages
