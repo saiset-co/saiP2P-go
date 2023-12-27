@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 
@@ -41,7 +42,7 @@ func Run() {
 		}
 	}()
 
-	socketServer := socket.NewServer(config.SocketPort, false)
+	socketServer := socket.NewServer(config.SocketPort, true)
 	go func() {
 		if err := socketServer.Listen(ctx); err != nil {
 			return
@@ -51,13 +52,30 @@ func Run() {
 	go func() {
 		in := socketServer.Incoming()
 
-		socket.SendWithPool(ctx, in, 10, func(m socket.SocketMessage) error {
-			core.Lock()
-			core.SavedMessages[string(m.Data)] = true
-			core.Unlock()
+		socket.Pool(ctx, in, 30, func(m socket.SocketMessage) error {
 
-			err = core.SendMsg(m.Data, []string{}, core.GetRealAddress())
-			return err
+			switch m.Method {
+			case "broadcast":
+				core.Lock()
+				core.SavedMessages[string(m.Data)] = true
+				core.Unlock()
+
+				err = core.SendMsg(m.Data, []string{}, core.GetRealAddress())
+				return err
+			case "peers":
+				peerMap := map[string]bool{}
+				core.Lock()
+				peerMap = core.ConnectionStorage
+				core.Unlock()
+
+				peers, _ := json.Marshal(peerMap)
+				socketServer.Broadcast(&socket.SocketMessage{Method: "peers", Data: peers})
+			default:
+				// direct
+
+			}
+
+			return nil
 		})
 	}()
 
@@ -69,6 +87,7 @@ func Run() {
 				core.Logger.Error("main -> s.Next", zap.Error(err))
 				continue
 			}
+
 			socketServer.Broadcast(&socket.SocketMessage{Method: "forward", Data: msg.Data})
 		}
 	}()

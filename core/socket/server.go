@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,6 +98,19 @@ func (r *Server) Broadcast(m *SocketMessage) {
 
 		c.out <- *m
 	}
+}
+
+func (r *Server) Direct(conn int64, m *SocketMessage) {
+	r.ConnMap.mu.Lock()
+	defer r.ConnMap.mu.Unlock()
+
+	c, exist := r.ConnMap.connections[conn]
+	if exist {
+		r.Logger.Error(errors.New(".Direct conn not exist!"), "want conn: "+strconv.Itoa(int(conn)))
+		return
+	}
+
+	c.out <- *m
 }
 
 func (r *Server) Cleaner(ctx context.Context) {
@@ -235,7 +249,6 @@ func (r *Server) handleConnection(conn net.Conn) {
 				}
 
 				for _, m := range messages {
-					r.Logger.Info(m.Method + " from " + remote)
 
 					switch m.Method {
 					case "pong":
@@ -251,10 +264,13 @@ func (r *Server) handleConnection(conn net.Conn) {
 					case "ping":
 						out <- NewPongMessage()
 					case "greeting":
+						r.Logger.Info(m.Method + " from " + remote)
 						r.ConnMap.mu.Lock()
 						r.ConnMap.connections[num].name = string(m.Data)
 						r.ConnMap.mu.Unlock()
 					default:
+						r.Logger.Info(m.Method + " from " + remote)
+						m.Conn = num
 						r.fanIn <- m
 					}
 				}

@@ -72,7 +72,6 @@ func TestP2P(t *testing.T) {
 			}
 		}
 	})
-
 	t.Run("client disconnected", func(t *testing.T) {
 		ctx := context.TODO()
 		server := NewServer(":3333", true)
@@ -91,7 +90,6 @@ func TestP2P(t *testing.T) {
 
 		}
 	})
-
 	t.Run("server slow", func(t *testing.T) {
 		ctx := context.TODO()
 		server := NewServer(":3334", false)
@@ -128,7 +126,6 @@ func TestP2P(t *testing.T) {
 			}
 		}
 	})
-
 	t.Run("spam", func(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*5)
@@ -172,7 +169,6 @@ func TestP2P(t *testing.T) {
 			}
 		}
 	})
-
 	t.Run("server stopped", func(t *testing.T) {
 		ctx := context.TODO()
 		server := NewServer(":3334", true)

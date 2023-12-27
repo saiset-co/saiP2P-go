@@ -2,7 +2,6 @@ package socket
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net"
 	"strings"
@@ -65,6 +64,7 @@ func NewPongMessage() SocketMessage {
 type SocketMessage struct {
 	Method string `json:"method"`
 	Data   []byte `json:"data"`
+	Conn   int64  `json:"name"`
 }
 
 func read(buf *bytes.Buffer, conn net.Conn) ([]SocketMessage, error) {
@@ -126,37 +126,4 @@ func send(l Logger, conn net.Conn, m SocketMessage) error {
 	}
 
 	return nil
-}
-
-func SendWithPool[Message any](ctx context.Context, in chan Message, count int, fn func(Message) error) {
-
-	repeaters := make([]chan Message, count)
-	for i := range repeaters {
-		repeaters[i] = make(chan Message, 100)
-		defer close(repeaters[i])
-
-		go func(i int) {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case m := <-repeaters[i]:
-					fn(m)
-				}
-			}
-		}(i)
-	}
-
-	next := 0
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case m := <-in:
-			repeaters[next] <- m
-			if next > count-1 {
-				next = 0
-			}
-		}
-	}
 }

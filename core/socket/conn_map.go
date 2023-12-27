@@ -22,7 +22,6 @@ func (m *ConnMap) Update(num int64, fn func(c *SocketConn)) {
 	defer m.mu.Unlock()
 
 	fn(m.connections[num])
-
 }
 
 func (m *ConnMap) Conn(num int64) net.Conn {
@@ -37,6 +36,14 @@ func (m *ConnMap) Conn(num int64) net.Conn {
 	conn := m.connections[num].conn
 
 	return conn
+}
+
+func (m *ConnMap) ConnExist(num int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, ok := m.connections[num]
+	return ok
 }
 
 func (m *ConnMap) ReadBuffer(num int64) *bytes.Buffer {
@@ -156,7 +163,7 @@ func (m *ConnMap) DropConn(num int64) {
 
 	_, ok := m.connections[num]
 	if !ok {
-		println(1)
+		return
 	}
 
 	_ = m.connections[num].conn.Close()

@@ -3,6 +3,7 @@ package socket
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -190,14 +191,20 @@ func (r *Client) run(pctx context.Context) {
 }
 
 func (r *Client) read(num int64) ([]SocketMessage, error) {
-	r.resolveConn(num)
+	if !r.ConnMap.ConnExist(num) {
+		return nil, errors.New("conn not exit")
+	}
 	conn := r.ConnMap.Conn(num)
 	readBuffer := r.ConnMap.ReadBuffer(num)
 	return read(readBuffer, conn)
 }
 
 func (r *Client) send(num int64, m SocketMessage) error {
-	r.resolveConn(num)
+
+	if !r.ConnMap.ConnExist(num) {
+		return errors.New("conn not exit")
+	}
+
 	r.ConnMap.Update(num, func(c *SocketConn) {
 		c.SentCount++
 	})
@@ -248,7 +255,6 @@ func (r *Client) resolveConn(num int64) {
 
 func (r *Client) Send(m SocketMessage) {
 	num := r.ConnMap.Next()
-	r.resolveConn(num)
 	r.ConnMap.Send(num, m)
 }
 
@@ -283,7 +289,6 @@ func (r *Client) Maker(ctx context.Context) {
 
 		for i := 0; i < needMoreConnections; i++ {
 			go r.run(ctx)
-			time.Sleep(time.Second)
 		}
 
 		select {
